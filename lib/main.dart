@@ -52,14 +52,8 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
     
     try {
       await _supabase.from('orders').update({'status': newStatus}).eq('id', id);
-      // Remove from cache after successful update (stream will update)
-      Future.delayed(const Duration(seconds: 2), () {
-        if (mounted) {
-          setState(() {
-            _localStatusCache.remove(id);
-          });
-        }
-      });
+      // Don't remove from cache immediately - let the stream update naturally
+      // The cache will be cleared when the stream confirms the change
     } catch (e) {
       debugPrint("Error updating status: $e");
       // Remove from cache on error to revert to original status
@@ -216,19 +210,6 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
             child: const Icon(Icons.coffee, color: Colors.white, size: 24),
           ),
           const SizedBox(width: 12),
-          // Add your logo here
-          Container(
-            width: 40,
-            height: 40,
-            decoration: BoxDecoration(
-              borderRadius: BorderRadius.circular(8),
-              image: const DecorationImage(
-                image: AssetImage('assets/logo.png'), // Add your logo file
-                fit: BoxFit.contain,
-              ),
-            ),
-          ),
-          const SizedBox(width: 16),
           const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -429,11 +410,27 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
         }
 
         final activeOrders = snapshot.data!.where((order) {
+          final String orderId = order['id'].toString();
           final String status = order['status']?.toString().toLowerCase() ?? 'pending';
           final bool isCorrectStatus = ['paid', 'preparing', 'ready'].contains(status);
           final bool isBulk = order['is_bulk'] == true;
           
           if (!isCorrectStatus || isBulk) return false;
+          
+          // Clear cache if stream status matches cached status (meaning update is confirmed)
+          if (_localStatusCache.containsKey(orderId)) {
+            final String cachedStatus = _localStatusCache[orderId]!;
+            if (cachedStatus == status) {
+              // Stream has caught up with our local change, clear the cache
+              WidgetsBinding.instance.addPostFrameCallback((_) {
+                if (mounted) {
+                  setState(() {
+                    _localStatusCache.remove(orderId);
+                  });
+                }
+              });
+            }
+          }
           
           return true;
         }).toList();
