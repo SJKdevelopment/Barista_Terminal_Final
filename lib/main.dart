@@ -25,6 +25,9 @@ class BaristaKDSPage extends StatefulWidget {
 
 class _BaristaKDSPageState extends State<BaristaKDSPage> {
   final _supabase = Supabase.instance.client;
+  final _searchController = TextEditingController();
+  String _searchQuery = '';
+  final Map<String, String> _localStatusCache = {};
 
   @override
   void initState() {
@@ -42,10 +45,27 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
   }
 
   Future<void> _updateStatus(String id, String newStatus) async {
+    // Update local cache immediately for instant feedback
+    setState(() {
+      _localStatusCache[id] = newStatus;
+    });
+    
     try {
       await _supabase.from('orders').update({'status': newStatus}).eq('id', id);
+      // Remove from cache after successful update (stream will update)
+      Future.delayed(const Duration(seconds: 2), () {
+        if (mounted) {
+          setState(() {
+            _localStatusCache.remove(id);
+          });
+        }
+      });
     } catch (e) {
       debugPrint("Error updating status: $e");
+      // Remove from cache on error to revert to original status
+      setState(() {
+        _localStatusCache.remove(id);
+      });
     }
   }
 
@@ -175,7 +195,6 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
           ],
         ),
       ),
-      floatingActionButton: _buildQuickActions(),
     );
   }
 
@@ -205,6 +224,8 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
             ],
           ),
           const Spacer(),
+          _buildRewardsButton(),
+          const SizedBox(width: 16),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
             decoration: BoxDecoration(
@@ -242,15 +263,21 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
         
         return Container(
           padding: const EdgeInsets.all(16),
-          child: Row(
+          child: Column(
             children: [
-              _buildStatCard("PENDING", pendingCount, const Color(0xFFE91E63)),
-              const SizedBox(width: 12),
-              _buildStatCard("PREPARING", preparingCount, const Color(0xFFFF9800)),
-              const SizedBox(width: 12),
-              _buildStatCard("READY", readyCount, const Color(0xFF4CAF50)),
-              const Spacer(),
-              _buildQuickActionBtn(Icons.refresh, "REFRESH", () => setState(() {})),
+              Row(
+                children: [
+                  _buildStatCard("PENDING", pendingCount, const Color(0xFFE91E63)),
+                  const SizedBox(width: 12),
+                  _buildStatCard("PREPARING", preparingCount, const Color(0xFFFF9800)),
+                  const SizedBox(width: 12),
+                  _buildStatCard("READY", readyCount, const Color(0xFF4CAF50)),
+                  const Spacer(),
+                  _buildQuickActionBtn(Icons.refresh, "REFRESH", () => setState(() {})),
+                ],
+              ),
+              const SizedBox(height: 12),
+              _buildSearchBar(),
             ],
           ),
         );
@@ -273,6 +300,77 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
             const SizedBox(height: 4),
             Text(label, style: const TextStyle(color: Color(0xFF8B949E), fontSize: 12, fontWeight: FontWeight.w500)),
           ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildSearchBar() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF161B22),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: Colors.white.withOpacity(0.1)),
+      ),
+      child: TextField(
+        controller: _searchController,
+        onChanged: (value) {
+          setState(() {
+            _searchQuery = value.toLowerCase();
+          });
+        },
+        style: const TextStyle(color: Colors.white, fontSize: 14),
+        decoration: InputDecoration(
+          hintText: "Search by order ID, customer name, or items...",
+          hintStyle: const TextStyle(color: Color(0xFF8B949E), fontSize: 14),
+          prefixIcon: const Icon(Icons.search, color: Color(0xFF8B949E), size: 20),
+          suffixIcon: _searchQuery.isNotEmpty
+              ? IconButton(
+                  icon: const Icon(Icons.clear, color: Color(0xFF8B949E), size: 20),
+                  onPressed: () {
+                    _searchController.clear();
+                    setState(() {
+                      _searchQuery = '';
+                    });
+                  },
+                )
+              : null,
+          border: InputBorder.none,
+          contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildRewardsButton() {
+    return Container(
+      decoration: BoxDecoration(
+        color: const Color(0xFF238636),
+        borderRadius: BorderRadius.circular(12),
+        boxShadow: [
+          BoxShadow(
+            color: const Color(0xFF238636).withOpacity(0.3),
+            blurRadius: 6,
+            offset: const Offset(0, 2),
+          ),
+        ],
+      ),
+      child: Material(
+        color: Colors.transparent,
+        child: InkWell(
+          onTap: _showRewardLookup,
+          borderRadius: BorderRadius.circular(12),
+          child: const Padding(
+            padding: EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.local_activity, color: Colors.white, size: 18),
+                SizedBox(width: 8),
+                Text("REWARDS", style: TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 14)),
+              ],
+            ),
+          ),
         ),
       ),
     );
@@ -321,30 +419,11 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
           final String status = order['status']?.toString().toLowerCase() ?? 'pending';
           final bool isCorrectStatus = ['paid', 'preparing', 'ready'].contains(status);
           final bool isBulk = order['is_bulk'] == true;
-          return isCorrectStatus && !isBulk;
+          
+          if (!isCorrectStatus || isBulk) return false;
+          
+          return true;
         }).toList();
-
-        if (activeOrders.isEmpty) {
-          return Center(
-            child: Column(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Container(
-                  padding: const EdgeInsets.all(24),
-                  decoration: BoxDecoration(
-                    color: const Color(0xFF161B22),
-                    shape: BoxShape.circle,
-                    border: Border.all(color: Colors.white.withOpacity(0.1)),
-                  ),
-                  child: const Icon(Icons.check_circle, color: Color(0xFF238636), size: 48),
-                ),
-                const SizedBox(height: 16),
-                const Text("ALL ORDERS COMPLETE", style: TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)),
-                const Text("Ready for new orders", style: TextStyle(color: Color(0xFF8B949E), fontSize: 14)),
-              ],
-            ),
-          );
-        }
 
         return FutureBuilder<List<Map<String, dynamic>>>(
           future: _enrichOrdersWithCustomerNames(activeOrders),
@@ -353,17 +432,62 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
               return const Center(child: CircularProgressIndicator(color: Color(0xFF238636)));
             }
 
+            // Apply search filter after enrichment for better performance
+            final filteredOrders = _searchQuery.isEmpty 
+                ? enrichedSnapshot.data!
+                : enrichedSnapshot.data!.where((order) {
+                    final String orderId = order['id'].toString().substring(0, 6).toUpperCase();
+                    final String customerName = order['customer_name']?.toString().toLowerCase() ?? '';
+                    final String itemsSummary = order['items_summary']?.toString().toLowerCase() ?? '';
+                    
+                    return orderId.toLowerCase().contains(_searchQuery) ||
+                           customerName.contains(_searchQuery) ||
+                           itemsSummary.contains(_searchQuery);
+                  }).toList();
+
+            if (filteredOrders.isEmpty) {
+              return Center(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    Container(
+                      padding: const EdgeInsets.all(24),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF161B22),
+                        shape: BoxShape.circle,
+                        border: Border.all(color: Colors.white.withOpacity(0.1)),
+                      ),
+                      child: Icon(
+                        _searchQuery.isNotEmpty ? Icons.search_off : Icons.check_circle, 
+                        color: const Color(0xFF238636), 
+                        size: 48
+                      ),
+                    ),
+                    const SizedBox(height: 16),
+                    Text(
+                      _searchQuery.isNotEmpty ? "NO ORDERS FOUND" : "ALL ORDERS COMPLETE", 
+                      style: const TextStyle(color: Colors.white, fontSize: 24, fontWeight: FontWeight.bold)
+                    ),
+                    Text(
+                      _searchQuery.isNotEmpty ? "Try a different search term" : "Ready for new orders", 
+                      style: const TextStyle(color: Color(0xFF8B949E), fontSize: 14)
+                    ),
+                  ],
+                ),
+              );
+            }
+
             return Padding(
-              padding: const EdgeInsets.all(16),
+              padding: const EdgeInsets.all(12),
               child: GridView.builder(
                 gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-                  crossAxisCount: 4,
-                  crossAxisSpacing: 16,
-                  mainAxisSpacing: 16,
-                  childAspectRatio: 0.6,
+                  crossAxisCount: 5,
+                  crossAxisSpacing: 12,
+                  mainAxisSpacing: 12,
+                  childAspectRatio: 0.8,
                 ),
-                itemCount: enrichedSnapshot.data!.length,
-                itemBuilder: (context, index) => _buildProfessionalOrderTicket(enrichedSnapshot.data![index]),
+                itemCount: filteredOrders.length,
+                itemBuilder: (context, index) => _buildProfessionalOrderTicket(filteredOrders[index]),
               ),
             );
           },
@@ -436,9 +560,12 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
   }
 
   Widget _buildProfessionalOrderTicket(Map<String, dynamic> order) {
-    final String status = order['status']?.toString().toLowerCase() ?? 'paid';
+    final String orderId = order['id'].toString();
+    // Use cached status if available, otherwise use database status
+    String status = _localStatusCache[orderId] ?? order['status']?.toString().toLowerCase() ?? 'paid';
+    
     final String timeLabel = _getTimeSinceOrder(order['created_at']);
-    final String orderId = "#${order['id'].toString().substring(0, 6).toUpperCase()}";
+    final String displayOrderId = "#${orderId.substring(0, 6).toUpperCase()}";
 
     final List<String> items = (order['items_summary']?.toString() ?? "NEW ORDER")
         .split(',')
@@ -454,11 +581,12 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
                        (status == 'ready' ? "collected" : "preparing");
     
     bool isUrgent = DateTime.now().difference(DateTime.tryParse(order['created_at']) ?? DateTime.now()).inMinutes > 10;
+    bool isUpdating = _localStatusCache.containsKey(orderId);
 
     return Material(
       color: Colors.transparent,
       child: InkWell(
-        onTap: () => _updateStatus(order['id'].toString(), nextStatus),
+        onTap: () => _updateStatus(orderId, nextStatus),
         borderRadius: BorderRadius.circular(12),
         child: Container(
           decoration: BoxDecoration(
@@ -481,7 +609,7 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
             children: [
               // Header with status
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
                 decoration: BoxDecoration(
                   color: statusColor.withOpacity(0.1),
                   borderRadius: const BorderRadius.vertical(top: Radius.circular(12)),
@@ -496,7 +624,7 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
                         borderRadius: BorderRadius.circular(6),
                       ),
                       child: Text(
-                        orderId,
+                        displayOrderId,
                         style: const TextStyle(
                           color: Colors.white, 
                           fontSize: 14, 
@@ -506,6 +634,22 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
                       ),
                     ),
                     const Spacer(),
+                    if (isUpdating)
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.blue,
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: const Text(
+                          "UPDATING...",
+                          style: TextStyle(
+                            color: Colors.white, 
+                            fontSize: 10, 
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
                     if (isUrgent)
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
@@ -545,7 +689,7 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
               // Order items
               Expanded(
                 child: Container(
-                  padding: const EdgeInsets.all(16),
+                  padding: const EdgeInsets.all(12),
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
@@ -564,7 +708,7 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
                           itemCount: items.length,
                           itemBuilder: (context, index) {
                             return Padding(
-                              padding: const EdgeInsets.only(bottom: 6),
+                              padding: const EdgeInsets.only(bottom: 4),
                               child: Row(
                                 children: [
                                   Container(
@@ -625,7 +769,7 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
               
               // Action button area (now just visual, click is handled by parent InkWell)
               Container(
-                height: 56,
+                height: 48,
                 decoration: BoxDecoration(
                   color: statusColor.withOpacity(0.15),
                   borderRadius: const BorderRadius.vertical(bottom: Radius.circular(12)),
