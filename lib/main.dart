@@ -215,6 +215,19 @@ class _BaristaKDSPageState extends State<BaristaKDSPage> {
             ),
             child: const Icon(Icons.coffee, color: Colors.white, size: 24),
           ),
+          const SizedBox(width: 12),
+          // Add your logo here
+          Container(
+            width: 40,
+            height: 40,
+            decoration: BoxDecoration(
+              borderRadius: BorderRadius.circular(8),
+              image: const DecorationImage(
+                image: AssetImage('assets/logo.png'), // Add your logo file
+                fit: BoxFit.contain,
+              ),
+            ),
+          ),
           const SizedBox(width: 16),
           const Column(
             crossAxisAlignment: CrossAxisAlignment.start,
